@@ -1,0 +1,8 @@
+dataset: orders
+columns:
+  order_id: {type: string, nullable: false, unique: true}
+  amount:   {type: number, nullable: false, min: 0}
+  status:   {allowed: [new, paid]}
+  order_date: {type: date, nullable: false}
+checks:
+  - {type: not_null, columns: [order_id, customer]}

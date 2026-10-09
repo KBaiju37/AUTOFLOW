@@ -1,0 +1,6 @@
+pandas>=2.1
+pyyaml>=6
+# optional connectors
+openpyxl>=3.1      # Excel
+pyarrow>=14        # Parquet / Arrow tables
+sqlalchemy>=2      # PostgreSQL / MySQL (plus psycopg2-binary or pymysql)\nsqlglot>=25        # SQL AST validation for custom read-only SQL queries
