@@ -1,0 +1,35 @@
+# Example AutoFlow integration. Paths are relative to this file. Never put credentials here.
+autoflow:
+  name: orders
+  mode: dry_run            # dry_run | gate | monitor  (the CLI also defaults to dry-run)
+
+source:
+  type: csv
+  path: orders.csv
+
+rules_file: orders_rules.yaml
+
+profiling:
+  sample_size: 10000
+
+validation:
+  use_generic_rules: true
+  allow_partial_success: true
+  max_quarantine_pct: 50
+
+recovery:
+  enabled: false           # --enable-recovery turns it on for one run
+  auto_apply_categories: [A]
+  approved_rules: []       # e.g. [match_allowed_case] to pre-approve a category-B rule
+
+output:
+  type: sqlite_staging     # none | sqlite_staging | local_files
+  enabled: true            # only written in gate mode (--commit / --enable-recovery)
+  path: .autoflow/staging.db
+
+quarantine:
+  enabled: true
+
+audit:
+  enabled: true
+  path: .autoflow/audit.db

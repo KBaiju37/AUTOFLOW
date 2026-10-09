@@ -1,0 +1,17 @@
+# Rules for the public Open-Meteo geocoding search response.
+dataset: open_meteo_geocoding
+columns:
+  name:
+    type: string
+    nullable: false
+    min_length: 1
+  latitude:
+    type: number
+    nullable: false
+    min: -90
+    max: 90
+  longitude:
+    type: number
+    nullable: false
+    min: -180
+    max: 180

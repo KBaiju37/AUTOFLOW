@@ -1,0 +1,7 @@
+pandas>=2.1
+pyyaml>=6
+streamlit>=1.35
+openpyxl>=3.1
+pyarrow>=14
+sqlalchemy>=2
+sqlglot>=25

@@ -1,0 +1,50 @@
+# Public live API demo. No API key is needed for this endpoint.
+# Paths are relative to this YAML file.
+autoflow:
+  name: open_meteo_geocoding_pune
+  mode: dry_run
+
+source:
+  type: rest_api
+  url: https://geocoding-api.open-meteo.com/v1/search
+  params:
+    name: Pune
+    count: 10
+    language: en
+    format: json
+  records_path: results
+  timeout: 15
+  max_response_bytes: 2000000
+  max_pages: 1
+  pagination:
+    type: none
+
+rules_file: live_geocoding_rules.yaml
+
+profiling:
+  enabled: true
+  sample_size: 1000
+
+validation:
+  use_generic_rules: true
+  fail_on_missing_required_columns: true
+  fail_on_schema_drift: true
+  allow_partial_success: true
+  max_quarantine_pct: 25
+  warnings_block: false
+
+recovery:
+  enabled: false
+  auto_apply_categories: [A]
+  approved_rules: []
+
+output:
+  type: none
+  enabled: false
+
+quarantine:
+  enabled: true
+
+audit:
+  enabled: true
+  path: .autoflow/live_api_audit.db

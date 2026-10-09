@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "autoflow"
+version = "0.1.0"
+description = "Reliability layer for existing data pipelines: profile, validate, recover, quarantine, audit"
+requires-python = ">=3.9"
+dependencies = ["pandas>=2.1", "pyyaml>=6"]
+
+[project.optional-dependencies]
+excel = ["openpyxl>=3.1"]
+parquet = ["pyarrow>=14"]
+sql = ["sqlalchemy>=2", "sqlglot>=25"]
+api = ["fastapi>=0.110", "uvicorn[standard]>=0.27"]
+test = ["pytest>=8", "httpx>=0.27"]
+
+[project.scripts]
+autoflow = "autoflow.cli:main"
+
+[tool.setuptools]
+packages = ["autoflow", "autoflow.sources"]

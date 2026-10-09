@@ -1,0 +1,6 @@
+order_id,customer,amount,status,order_date
+0001,alice,19.99,paid,2024-05-01
+0002,bob, 25.00 ,paid,2024-05-02
+0003,carol,abc,new,2024-05-03
+0004,dave,12.50,Paid,2024-05-04
+0005,erin,7.00,new,2024-05-05
