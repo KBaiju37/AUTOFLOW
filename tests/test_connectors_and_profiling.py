@@ -13,7 +13,7 @@ from autoflow.registry import connector_for_path, registry
 from autoflow.sources.api import RestApiSource
 from autoflow.sources.files import CsvSource, ExcelSource, JsonlSource, JsonSource, ParquetSource
 from autoflow.sources.sql import SqlAlchemySource, SqliteSource, check_query
-from autoflow.util import dependency_available
+from autoflow.util import dependency_available, safe_nunique
 
 
 class TmpCase(unittest.TestCase):
@@ -27,6 +27,15 @@ class TmpCase(unittest.TestCase):
         with open(p, mode, **kw) as fh:
             fh.write(text)
         return p
+
+
+class SafeNuniqueTests(unittest.TestCase):
+    def test_counts_unhashable_json_values_and_ignores_nulls(self):
+        values = pd.Series([[1, 2], [1, 2], {"a": 1}, None], dtype=object)
+        self.assertEqual(safe_nunique(values), 2)
+
+    def test_preserves_pandas_scalar_counting(self):
+        self.assertEqual(safe_nunique(pd.Series([1, 1, 2, None])), 2)
 
 
 class CsvTests(TmpCase):

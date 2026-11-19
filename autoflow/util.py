@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime as _dt
 import hashlib
 import importlib
+import json
 import math
 import os
 import re
@@ -60,6 +61,22 @@ def jsonable(v: Any) -> Any:
     except (TypeError, ValueError):
         pass
     return str(v)
+
+
+def safe_nunique(series: pd.Series) -> int:
+    """Count distinct non-null values, including unhashable containers."""
+    try:
+        return int(series.nunique(dropna=True))
+    except TypeError:
+        unique = set()
+        for value in series.dropna():
+            try:
+                key = (0, value)
+                hash(key)
+            except TypeError:
+                key = (1, type(value).__qualname__, json.dumps(value, sort_keys=True, default=str))
+            unique.add(key)
+        return len(unique)
 
 
 def sha256_file(path: str, extra: str = "") -> str:

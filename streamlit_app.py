@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -11,19 +13,29 @@ from autoflow.profiling import schema_proposal
 from autoflow.rules import RuleSet
 from autoflow.sources.api import RestApiSource
 from autoflow.contracts import Mode
+from autoflow.gemini_analysis import DEFAULT_MODEL, generate_overview
+from autoflow.util import safe_nunique
 
-st.set_page_config(page_title="AutoFlow | Data Reliability Studio", page_icon="🔄", layout="wide")
+ROOT = Path(__file__).resolve().parent
+
+st.set_page_config(page_title="AutoFlow | Data Quality Workbench", page_icon="A", layout="wide")
 
 st.markdown("""
 <style>
-.block-container {padding-top: 1.5rem; padding-bottom: 2rem; max-width: 1500px;}
-.hero {padding: 1.25rem 1.5rem; border-radius: 16px; background: linear-gradient(120deg,#10243a,#174b59); color: white; margin-bottom: 1rem;}
-.hero h1 {margin: 0; font-size: 2.2rem; color: white;}
-.hero p {margin: .35rem 0 0 0; color: #d9e8f1;}
-.small-muted {color: #6b7280; font-size: .9rem;}
-div[data-testid="stMetric"] {background: rgba(120,140,160,.08); padding: .8rem; border-radius: 12px; border: 1px solid rgba(120,140,160,.18);}
+.block-container {padding-top: 1.4rem; padding-bottom: 2.5rem; max-width: 1360px;}
+.hero {padding: 2.25rem 2rem 1.8rem; border: 1px solid #dce7ef; border-radius: 18px; background: linear-gradient(120deg,#10243a,#176258); color: #fff; margin-bottom: 1.25rem;}
+.hero .eyebrow {display: block; color: #a7f3d0; font-size: .75rem; font-weight: 700; line-height: 1.25; letter-spacing: .14em; margin: .1rem 0 .6rem;}
+.hero h1 {margin: 0; font-size: 2.35rem; line-height: 1.15; color: #fff;}
+.hero p {max-width: 780px; margin: .6rem 0 0; color: #d9e8f1; font-size: 1.04rem;}
+div[data-testid="stMetric"] {background: #f7fafc; padding: .85rem 1rem; border-radius: 12px; border: 1px solid #e3ebf2;}
+div[data-testid="stTabs"] button {font-weight: 650;}
+div[data-testid="stExpander"] {border-color: #e3ebf2; border-radius: 12px;}
 </style>
-<div class="hero"><h1>🔄 AutoFlow Data Reliability Studio</h1><p>Ingest → Profile → Validate → Investigate → Export. Inspect every stage before data moves downstream.</p></div>
+<div class="hero">
+  <p class="eyebrow">DATA QUALITY WORKBENCH</p>
+  <h1>Make data safer to move.</h1>
+  <p>Inspect incoming data, enforce your rules, and catch quality issues before they reach reports, models, or downstream systems.</p>
+</div>
 """, unsafe_allow_html=True)
 
 if "df" not in st.session_state:
@@ -34,32 +46,40 @@ if "last_profile" not in st.session_state:
     st.session_state.last_profile = None
 if "last_result" not in st.session_state:
     st.session_state.last_result = None
+if "ai_overview" not in st.session_state:
+    st.session_state.ai_overview = None
 
 with st.sidebar:
-    st.header("Pipeline controls")
-    st.caption("Safe by default: this dashboard validates in memory and does not write to a production destination.")
+    st.header("AutoFlow")
+    st.caption("DATA RELIABILITY")
     st.divider()
-    st.subheader("Quick start")
-    st.markdown("1. Upload a CSV **or** fetch an API.\n2. Inspect the preview and profile.\n3. Configure validation rules.\n4. Run checks and export results.")
+    st.markdown("### Review before you load")
+    st.caption("A quality gate for data already moving through your pipeline.")
     st.divider()
-    st.subheader("Capabilities")
-    st.write("✓ CSV ingestion")
-    st.write("✓ REST/JSON API ingestion")
-    st.write("✓ Schema and statistical profiling")
-    st.write("✓ Explicit validation rules")
-    st.write("✓ Issue list and quarantine preview")
-    st.write("✓ CSV / JSON / rules proposal export")
+    st.markdown("**1** · Load a file or API")
+    st.markdown("**2** · Profile and explore")
+    st.markdown("**3** · Validate your rules")
+    st.markdown("**4** · Review and export")
+    st.divider()
+    st.caption("Safe by default: checks run in memory. This dashboard does not write to a production destination.")
 
-source_tab, profile_tab, validate_tab, export_tab = st.tabs(["1 · Ingest data", "2 · Profile & explore", "3 · Validate quality", "4 · Export & report"])
+source_tab, profile_tab, validate_tab, export_tab = st.tabs(["Load data", "Explore profile", "Quality gate", "Export"])
 
 with source_tab:
+    st.subheader("Bring data into the review")
+    st.caption("Start with a local file, a ready-to-run sample, or a REST/JSON endpoint.")
     left, right = st.columns([1, 1], gap="large")
     with left:
-        st.subheader("Upload a CSV file")
+        st.markdown("#### Upload a file")
         uploaded = st.file_uploader("Choose CSV", type=["csv", "tsv", "txt"], key="csv_upload")
         delimiter_choice = st.selectbox("Delimiter", ["Auto-detect", "Comma ,", "Tab \\t", "Semicolon ;", "Pipe |"], index=0)
         encoding = st.selectbox("Text encoding", ["utf-8", "utf-8-sig", "latin-1"], index=0)
-        if st.button("Ingest uploaded file", type="primary", disabled=uploaded is None, use_container_width=True):
+        load_col, detail_col = st.columns([1, 1.5], vertical_alignment="center")
+        with load_col:
+            load_uploaded = st.button("Load uploaded file", type="primary", disabled=uploaded is None, width="stretch")
+        with detail_col:
+            st.caption("CSV, TSV, and delimited text")
+        if load_uploaded:
             try:
                 sep_map = {"Auto-detect": None, "Comma ,": ",", "Tab \\t": "\t", "Semicolon ;": ";", "Pipe |": "|"}
                 df = pd.read_csv(uploaded, sep=sep_map[delimiter_choice], engine="python" if sep_map[delimiter_choice] is None else "c", encoding=encoding, on_bad_lines="error")
@@ -69,11 +89,28 @@ with source_tab:
                 st.session_state.source_label = uploaded.name
                 st.session_state.last_profile = None
                 st.session_state.last_result = None
+                st.session_state.ai_overview = None
                 st.success(f"Loaded {len(df):,} rows and {len(df.columns):,} columns from {uploaded.name}.")
             except Exception as exc:
                 st.error(f"CSV ingestion failed: {exc}")
+        st.divider()
+        st.markdown("#### Want a quick demo?")
+        st.caption("Load the included five-row orders sample. It has a malformed amount, extra whitespace, and inconsistent category casing.")
+        if st.button("Load demo orders", width="stretch"):
+            try:
+                demo_path = ROOT / "examples" / "orders.csv"
+                demo_df = pd.read_csv(demo_path, dtype={"order_id": "string"})
+                st.session_state.df = demo_df
+                st.session_state.source_label = "Demo orders sample"
+                st.session_state.last_profile = None
+                st.session_state.last_result = None
+                st.session_state.ai_overview = None
+                st.success("Demo orders loaded. Open Explore profile or Quality gate to continue.")
+            except (OSError, pd.errors.ParserError) as exc:
+                st.error(f"Could not load the bundled demo file: {exc}")
     with right:
-        st.subheader("Fetch a REST / JSON API")
+        st.markdown("#### Connect to a REST / JSON API")
+        st.caption("Fetch a JSON records endpoint. The bundled presets are public demo services.")
         api_presets = {
             "Open-Meteo geocoding (public demo)": ("https://geocoding-api.open-meteo.com/v1/search", {"name": "Pune", "count": 10, "language": "en", "format": "json"}, "results"),
             "JSONPlaceholder posts (public demo)": ("https://jsonplaceholder.typicode.com/posts", {}, ""),
@@ -88,7 +125,7 @@ with source_tab:
         max_records = st.number_input("Maximum records to load", min_value=1, max_value=10000, value=1000, step=100)
         with st.expander("Advanced request settings (optional)"):
             headers_text = st.text_area("HTTP headers (JSON object)", value="{}", height=80, help="Avoid pasting long-lived secrets into shared screenshots or source code.")
-        if st.button("Fetch API data", type="primary", use_container_width=True):
+        if st.button("Fetch API data", type="primary", width="stretch"):
             try:
                 params = json.loads(api_params_text or "{}")
                 headers = json.loads(headers_text or "{}")
@@ -109,6 +146,7 @@ with source_tab:
                 st.session_state.source_label = f"REST API · {api_url.strip()}"
                 st.session_state.last_profile = None
                 st.session_state.last_result = None
+                st.session_state.ai_overview = None
                 st.success(f"Fetched {len(dataset.frame):,} records from the API.")
                 if dataset.warnings:
                     for warning in dataset.warnings:
@@ -116,9 +154,9 @@ with source_tab:
             except Exception as exc:
                 st.error(f"API ingestion failed: {exc}")
     st.divider()
-    st.subheader("Current dataset")
+    st.subheader("Loaded dataset")
     if st.session_state.df is None:
-        st.info("No data loaded yet. Upload a CSV or use the API fetcher above.")
+        st.info("No data loaded yet. Use the demo sample for a quick presentation, or upload your own file.")
     else:
         df = st.session_state.df
         m1, m2, m3 = st.columns(3)
@@ -126,32 +164,67 @@ with source_tab:
         m2.metric("Columns", f"{len(df.columns):,}")
         m3.metric("Source", "CSV" if not st.session_state.source_label.startswith("REST API") else "REST API")
         st.caption(f"Source: {st.session_state.source_label}")
-        st.dataframe(df.head(100), use_container_width=True, height=320)
+        st.dataframe(df.head(100), width="stretch", height=320)
         with st.expander("Column names and inferred pandas types"):
-            st.dataframe(pd.DataFrame({"column": df.columns, "pandas_type": [str(df[c].dtype) for c in df.columns], "nulls": [int(df[c].isna().sum()) for c in df.columns], "unique_values": [int(df[c].nunique(dropna=True)) for c in df.columns]}), use_container_width=True)
+            st.dataframe(pd.DataFrame({"column": df.columns, "pandas_type": [str(df[c].dtype) for c in df.columns], "nulls": [int(df[c].isna().sum()) for c in df.columns], "unique_values": [safe_nunique(df[c]) for c in df.columns]}), width="stretch")
 
 with profile_tab:
-    st.subheader("Automated dataset profile")
+    st.subheader("Understand the shape of your data")
     if st.session_state.df is None:
-        st.info("Load data in the Ingest tab first.")
+        st.info("Load a dataset first. For a quick walkthrough, use the demo orders sample in Load data.")
     else:
         df = st.session_state.df
-        p1, p2 = st.columns([1, 3])
-        with p1:
-            dataset_name = st.text_input("Dataset name", value="uploaded_dataset", key="profile_dataset_name")
-            sample_size = st.number_input("Profile sample size (0 = all rows)", min_value=0, max_value=max(0, len(df)), value=min(len(df), 10000), step=max(1, min(1000, max(1, len(df)))), key="sample_size")
-            if st.button("Run profiler", type="primary", use_container_width=True):
-                try:
-                    cfg = {"profiling": {"sample_size": int(sample_size) if sample_size else None}}
-                    st.session_state.last_profile = AutoFlow(cfg).profile(df, dataset_name or "dataset")
-                    st.success("Profiling completed.")
-                except Exception as exc:
-                    st.error(f"Profiling failed: {exc}")
-        with p2:
-            st.markdown("**What profiling checks**")
-            st.write("Inferred types and confidence, null rate, unique values, duplicate rows, candidate keys, numeric ranges/outliers, string lengths, and cautious schema suggestions.")
+        st.caption("Get evidence about types, missing values, uniqueness, distributions, and possible schema issues. Suggestions are never business rules by themselves.")
+        profile_controls = st.columns([1.3, 1, 1])
+        dataset_name = profile_controls[0].text_input("Dataset name", value="uploaded_dataset", key="profile_dataset_name")
+        sample_size = profile_controls[1].number_input("Rows to profile (0 = all)", min_value=0, max_value=max(0, len(df)), value=min(len(df), 10000), step=max(1, min(1000, max(1, len(df)))), key="sample_size")
+        profile_controls[2].markdown("<br>", unsafe_allow_html=True)
+        if profile_controls[2].button("Build profile", type="primary", width="stretch"):
+            try:
+                cfg = {"profiling": {"sample_size": int(sample_size) if sample_size else None}}
+                st.session_state.last_profile = AutoFlow(cfg).profile(df, dataset_name or "dataset")
+                st.session_state.ai_overview = None
+                st.success("Profile ready.")
+            except Exception as exc:
+                st.error(f"Profiling failed: {exc}")
         profile = st.session_state.last_profile
         if profile:
+            with st.expander("Optional AI overview · Gemini API"):
+                st.warning(
+                    "This sends column names and aggregate profile statistics to Google Gemini. "
+                    "Row samples and category/example values are excluded. Gemini's free tier "
+                    "may use submitted content to improve Google products; review Google's terms "
+                    "and do not send sensitive metadata unless your policies allow it. Free-tier "
+                    "availability and quotas can change."
+                )
+                model_id = st.text_input(
+                    "Gemini model ID",
+                    value=DEFAULT_MODEL,
+                    help="Default: gemini-3.8-flash. Check Google AI Studio for current model availability.",
+                )
+                gemini_api_key = st.text_input(
+                    "Gemini API key",
+                    value=os.environ.get("GEMINI_API_KEY", ""),
+                    type="password",
+                    help="Create a key in Google AI Studio, or set GEMINI_API_KEY in the environment.",
+                )
+                consent = st.checkbox(
+                    "I agree to send the sanitized profile metadata to Google Gemini for analysis."
+                )
+                if st.button(
+                    "Generate AI overview",
+                    type="primary",
+                    disabled=not consent or not gemini_api_key.strip(),
+                ):
+                    try:
+                        with st.spinner("Requesting hosted model analysis…"):
+                            st.session_state.ai_overview = generate_overview(
+                                profile, gemini_api_key, model_id
+                            )
+                    except (ValueError, RuntimeError) as exc:
+                        st.error(f"AI overview failed: {exc}")
+                if st.session_state.ai_overview:
+                    st.markdown(st.session_state.ai_overview)
             a, b, c, d = st.columns(4)
             a.metric("Rows profiled", f"{profile.get('rows_profiled', 0):,}")
             b.metric("Columns", profile.get("columns_count", 0))
@@ -162,7 +235,7 @@ with profile_tab:
             for name, info in profile.get("columns", {}).items():
                 stats = info.get("numeric_stats", {})
                 col_rows.append({"Column": name, "Inferred type": info.get("inferred_type"), "Confidence": info.get("confidence_label"), "Nulls": info.get("null_count"), "Null %": round(info.get("null_pct", 0) * 100, 2), "Unique": info.get("unique_count"), "Role": info.get("possible_role"), "Outliers": info.get("potential_outliers", 0), "Min": stats.get("min"), "Mean": stats.get("mean"), "Max": stats.get("max"), "Needs confirmation": info.get("needs_confirmation")})
-            st.dataframe(pd.DataFrame(col_rows), use_container_width=True)
+            st.dataframe(pd.DataFrame(col_rows), width="stretch")
             with st.expander("Inspect detailed profile per column"):
                 selected_col = st.selectbox("Column", list(profile.get("columns", {}).keys()))
                 st.json(profile["columns"][selected_col])
@@ -172,25 +245,41 @@ with profile_tab:
                 st.download_button("Download schema proposal (JSON)", json.dumps(schema_proposal(profile), indent=2), file_name="autoflow_schema_proposal.json", mime="application/json")
 
 with validate_tab:
-    st.subheader("Quality gate and business rules")
+    st.subheader("Apply the rules your pipeline depends on")
     if st.session_state.df is None:
-        st.info("Load data in the Ingest tab first.")
+        st.info("Load a dataset first. For a quick walkthrough, use the demo orders sample in Load data.")
     else:
         df = st.session_state.df
         all_cols = list(df.columns)
+        st.caption("Explicit rules can block bad rows. Generic checks add cautious warnings; they do not replace your business definitions.")
         with st.form("validation_rules_form"):
             st.markdown("Configure rules that represent your data contract. Unticked columns have no explicit column rule.")
             required_text = st.text_input("Required columns (comma-separated; must exist)", value="", placeholder="customer_id, order_date, amount", help="You can name columns that are missing from the current data to detect upstream schema changes.")
             nonnull_cols = st.multiselect("Columns that must not be null", all_cols, default=[])
             unique_cols = st.multiselect("Columns that must be unique", all_cols, default=[])
-            numeric_candidates = [c for c in all_cols if pd.api.types.is_numeric_dtype(df[c])]
-            range_col = st.selectbox("Optional numeric range rule", ["(none)"] + numeric_candidates)
+            numeric_candidates = [
+                c for c in all_cols
+                if pd.api.types.is_numeric_dtype(df[c])
+                or (
+                    df[c].notna().any()
+                    and pd.to_numeric(df[c].astype(str).str.strip(), errors="coerce").notna().sum()
+                    >= max(1, int(df[c].notna().sum() * 0.5))
+                )
+            ]
+            range_options = ["(none)"] + numeric_candidates
+            demo_range_index = (
+                1 + numeric_candidates.index("amount")
+                if st.session_state.source_label == "Demo orders sample" and "amount" in numeric_candidates
+                else 0
+            )
+            range_col = st.selectbox("Optional numeric range rule", range_options, index=demo_range_index, help="Includes partly numeric text columns so a declared number rule can flag malformed values such as 'abc'.")
             rmin, rmax = st.columns(2)
             min_value = rmin.number_input("Minimum allowed value", value=0.0, format="%.6f")
             max_value = rmax.number_input("Maximum allowed value", value=100.0, format="%.6f")
-            max_quarantine_pct = st.slider("Maximum quarantined row percentage before gate blocks", 0, 100, 25)
+            default_quarantine_pct = 50 if st.session_state.source_label == "Demo orders sample" else 25
+            max_quarantine_pct = st.slider("Maximum quarantined row percentage before gate blocks", 0, 100, default_quarantine_pct)
             generic_checks = st.checkbox("Include AutoFlow's generic statistical checks", value=True, help="Adds conservative warnings for suspicious patterns; these are not a substitute for domain rules.")
-            submitted = st.form_submit_button("Run validation", type="primary", use_container_width=True)
+            submitted = st.form_submit_button("Run validation", type="primary", width="stretch")
         if submitted:
             try:
                 rule_columns: dict[str, Any] = {}
@@ -232,7 +321,7 @@ with validate_tab:
             if issues:
                 st.markdown("#### Findings")
                 issue_df = pd.DataFrame([{ "Severity": x.get("severity"), "Kind": x.get("kind"), "Code": x.get("code"), "Column": x.get("column") or "—", "Count": x.get("count", 0), "Finding": x.get("message"), "Recommendation": x.get("recommendation") or "—"} for x in issues])
-                st.dataframe(issue_df, use_container_width=True, hide_index=True)
+                st.dataframe(issue_df, width="stretch", hide_index=True)
                 with st.expander("Full issue details (JSON)"):
                     st.json(issues)
             else:
@@ -240,17 +329,18 @@ with validate_tab:
             quarantine = getattr(result, "quarantined_data", None)
             if quarantine is not None and not quarantine.empty:
                 st.markdown("#### Quarantined rows")
-                st.dataframe(quarantine, use_container_width=True)
+                st.dataframe(quarantine, width="stretch")
             elif result.get("quarantine_summary"):
                 st.markdown("#### Quarantine summary")
-                st.dataframe(pd.DataFrame(result["quarantine_summary"]), use_container_width=True)
+                st.dataframe(pd.DataFrame(result["quarantine_summary"]), width="stretch")
             if result.get("proposals"):
                 with st.expander("Recovery proposals — not automatically applied"):
-                    st.dataframe(pd.DataFrame(result["proposals"]), use_container_width=True)
+                    st.dataframe(pd.DataFrame(result["proposals"]), width="stretch")
                     st.info("This UI does not automatically apply recovery proposals or write to a destination.")
 
 with export_tab:
-    st.subheader("Download your data and run artifacts")
+    st.subheader("Take the review results with you")
+    st.caption("Export the loaded data, profile, and validation report for further review or a downstream workflow.")
     if st.session_state.df is None:
         st.info("Load data first to enable exports.")
     else:
@@ -258,14 +348,14 @@ with export_tab:
         e1, e2 = st.columns(2)
         with e1:
             st.markdown("#### Dataset")
-            st.download_button("Download loaded data as CSV", df.to_csv(index=False).encode("utf-8"), file_name="autoflow_loaded_data.csv", mime="text/csv", use_container_width=True)
-            st.download_button("Download loaded data as JSON", df.to_json(orient="records", indent=2, force_ascii=False).encode("utf-8"), file_name="autoflow_loaded_data.json", mime="application/json", use_container_width=True)
+            st.download_button("Download loaded data as CSV", df.to_csv(index=False).encode("utf-8"), file_name="autoflow_loaded_data.csv", mime="text/csv", width="stretch")
+            st.download_button("Download loaded data as JSON", df.to_json(orient="records", indent=2, force_ascii=False).encode("utf-8"), file_name="autoflow_loaded_data.json", mime="application/json", width="stretch")
         with e2:
             st.markdown("#### Run artifacts")
             if st.session_state.last_profile:
-                st.download_button("Download profile JSON", json.dumps(st.session_state.last_profile, indent=2, default=str), file_name="autoflow_profile.json", mime="application/json", use_container_width=True)
+                st.download_button("Download profile JSON", json.dumps(st.session_state.last_profile, indent=2, default=str), file_name="autoflow_profile.json", mime="application/json", width="stretch")
             if st.session_state.last_result:
-                st.download_button("Download validation report JSON", json.dumps(st.session_state.last_result, indent=2, default=str), file_name="autoflow_validation_report.json", mime="application/json", use_container_width=True)
+                st.download_button("Download validation report JSON", json.dumps(st.session_state.last_result, indent=2, default=str), file_name="autoflow_validation_report.json", mime="application/json", width="stretch")
             else:
                 st.caption("Run validation to enable the report export.")
         st.divider()
@@ -274,4 +364,4 @@ with export_tab:
         st.caption("The dashboard does not commit to a database or production destination. This is a review-first demo UI.")
 
 st.divider()
-st.caption("AutoFlow · Data reliability prototype · Review all inferred suggestions and API data before production use.")
+st.caption("AutoFlow · Data quality review before downstream use · Human review remains part of the gate.")
